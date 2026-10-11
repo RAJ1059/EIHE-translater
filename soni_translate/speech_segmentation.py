@@ -228,9 +228,10 @@ def transcribe_speech(
         asr_model = model_dir
         logger.info(f"ASR Model: {str(model_dir)}")
 
+    device_name = os.environ.get("SONITR_DEVICE") or ("cuda" if torch.cuda.is_available() else "cpu")
     model = whisperx.load_model(
         asr_model,
-        os.environ.get("SONITR_DEVICE"),
+        device_name,
         compute_type=compute_type,
         language=SOURCE_LANGUAGE,
         asr_options=asr_options,

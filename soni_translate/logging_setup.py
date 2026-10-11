@@ -4,52 +4,21 @@ import warnings
 import os
 
 
-def configure_logging_libs(debug=False):
-    warnings.filterwarnings(
-      action="ignore", category=UserWarning, module="pyannote"
-    )
-    modules = [
-      "numba", "httpx", "markdown_it", "speechbrain", "fairseq", "pyannote",
-      "faiss",
-      "pytorch_lightning.utilities.migration.utils",
-      "pytorch_lightning.utilities.migration",
-      "pytorch_lightning",
-      "lightning",
-      "lightning.pytorch.utilities.migration.utils",
-    ]
-    try:
-        for module in modules:
-            logging.getLogger(module).setLevel(logging.WARNING)
-        os.environ['TF_CPP_MIN_LOG_LEVEL'] = "3" if not debug else "1"
-
-        # fix verbose pyannote audio
-        def fix_verbose_pyannote(*args, what=""):
-            pass
-        import pyannote.audio.core.model # noqa
-        pyannote.audio.core.model.check_version = fix_verbose_pyannote
-    except Exception as error:
-        logger.error(str(error))
-
-
 def setup_logger(name_log):
-    logger = logging.getLogger(name_log)
-    logger.setLevel(logging.INFO)
+    lg = logging.getLogger(name_log)
+    lg.setLevel(logging.INFO)
 
     _default_handler = logging.StreamHandler()  # Set sys.stderr as stream.
     _default_handler.flush = sys.stderr.flush
-    logger.addHandler(_default_handler)
+    lg.addHandler(_default_handler)
 
-    logger.propagate = False
+    lg.propagate = False
 
-    handlers = logger.handlers
-
-    for handler in handlers:
+    for handler in lg.handlers:
         formatter = logging.Formatter("[%(levelname)s] >> %(message)s")
         handler.setFormatter(formatter)
 
-    # logger.handlers
-
-    return logger
+    return lg
 
 
 logger = setup_logger("sonitranslate")
@@ -66,3 +35,71 @@ def set_logging_level(verbosity_level):
     }
 
     logger.setLevel(logging_level_mapping.get(verbosity_level, logging.INFO))
+
+
+def configure_logging_libs(debug=False):
+    warnings.filterwarnings(
+        action="ignore", category=UserWarning, module="pyannote"
+    )
+    modules = [
+        "numba", "httpx", "markdown_it", "speechbrain", "fairseq", "pyannote",
+        "faiss",
+        "pytorch_lightning.utilities.migration.utils",
+        "pytorch_lightning.utilities.migration",
+        "pytorch_lightning",
+        "lightning",
+        "lightning.pytorch.utilities.migration.utils",
+    ]
+    try:
+        for module in modules:
+            logging.getLogger(module).setLevel(logging.WARNING)
+        os.environ['TF_CPP_MIN_LOG_LEVEL'] = "3" if not debug else "1"
+
+        # Compatibility shims for torchaudio / pyannote
+        try:
+            import torchaudio
+            if not hasattr(torchaudio, "get_audio_backend"):
+                torchaudio.get_audio_backend = lambda: "soundfile"
+            if not hasattr(torchaudio, "set_audio_backend"):
+                torchaudio.set_audio_backend = lambda *args, **kwargs: None
+            if not hasattr(torchaudio, "list_audio_backends"):
+                torchaudio.list_audio_backends = lambda: ["soundfile"]
+            import types
+            from dataclasses import dataclass
+            if "torchaudio.backend" not in sys.modules:
+                backend = types.ModuleType("torchaudio.backend")
+                common = types.ModuleType("torchaudio.backend.common")
+                @dataclass
+                class AudioMetaData:
+                    sample_rate: int = 16000
+                    num_frames: int = 0
+                    num_channels: int = 1
+                    bits_per_sample: int = 16
+                    encoding: str = "PCM_S"
+                common.AudioMetaData = AudioMetaData
+                backend.common = common
+                sys.modules["torchaudio.backend"] = backend
+                sys.modules["torchaudio.backend.common"] = common
+        except Exception:
+            pass
+
+        # Compatibility patch for PyTorch 2.6+ weights_only loading in pyannote / whisperx
+        try:
+            import torch
+            _orig_torch_load = torch.load
+
+            def _safe_torch_load(*args, **kwargs):
+                kwargs["weights_only"] = False
+                return _orig_torch_load(*args, **kwargs)
+
+            torch.load = _safe_torch_load
+        except Exception:
+            pass
+
+        # fix verbose pyannote audio
+        def fix_verbose_pyannote(*args, what=""):
+            pass
+        import pyannote.audio.core.model  # noqa
+        pyannote.audio.core.model.check_version = fix_verbose_pyannote
+    except Exception as error:
+        logger.error(str(error))

@@ -1,13 +1,14 @@
 from tqdm import tqdm
-from deep_translator import GoogleTranslator, MyMemoryTranslator
+from deep_translator import MyMemoryTranslator
 from deep_translator.exceptions import TooManyRequests
-from itertools import chain
 import copy
 from .language_configuration import fix_code_language, INVERTED_LANGUAGES
 from .logging_setup import logger
 import re
 import json
 import time
+import os
+import requests
 
 MYMEMORY_MAX_CHARS = 490
 
@@ -74,66 +75,40 @@ def _mymemory_translate(source, target, text):
     return " ".join(translator.translate(piece) for piece in pieces)
 
 
-_google_cooldown_until = 0.0
-_GOOGLE_COOLDOWN_SECONDS = 60
-
-
-def translate_with_retry(
-    translator, text, source, target, max_retries=3, base_delay=2
-):
+def _mymemory_translate_with_retry(source, target, text, max_retries=2, base_delay=3):
     """
-    Calls translator.translate(), retrying briefly when Google's free
-    endpoint rate-limits the request. If Google keeps refusing (e.g. the
-    IP got blocked rather than just rate-limited), falls back to the
-    MyMemory translator instead of failing the whole job.
-
-    Once Google refuses a request, a short-lived cooldown is set so
-    later calls (other lines/chunks in the same job) skip straight to
-    MyMemory instead of each burning time on retries against an
-    endpoint that's already known to be blocked.
+    Calls _mymemory_translate(), retrying briefly on MyMemory's own
+    rate limit (a burst/short-term throttle, separate from its daily
+    word quota) before giving up and keeping the original text.
     """
-    global _google_cooldown_until
-
-    if time.time() < _google_cooldown_until:
-        try:
-            return _mymemory_translate(source, target, text)
-        except Exception as error:
-            logger.warning(
-                "Google Translate still in cooldown and MyMemory also "
-                f"failed, keeping the original text for this line. "
-                f"Related: {error}"
-            )
-            return text
-
     last_error = None
     for attempt in range(max_retries):
         try:
-            return translator.translate(text)
+            return _mymemory_translate(source, target, text)
         except TooManyRequests as error:
             last_error = error
-            _google_cooldown_until = time.time() + _GOOGLE_COOLDOWN_SECONDS
+            delay = base_delay * (attempt + 1)
             logger.warning(
-                "Google Translate rate limit hit, switching to MyMemory "
-                f"for the next {_GOOGLE_COOLDOWN_SECONDS}s"
+                f"MyMemory rate limit hit, retrying in {delay}s "
+                f"(attempt {attempt + 1}/{max_retries})"
             )
+            time.sleep(delay)
+        except Exception as error:
+            last_error = error
             break
 
     logger.warning(
-        "Google Translate keeps rate-limiting this request, falling "
-        f"back to MyMemory translator. Related: {last_error}"
+        "MyMemory translator also failed/rate-limited, keeping "
+        f"the original text for this line. Related: {last_error}"
     )
-    try:
-        return _mymemory_translate(source, target, text)
-    except Exception as error:
-        logger.warning(
-            "MyMemory translator also failed/rate-limited, keeping "
-            f"the original text for this line. Related: {error}"
-        )
-        return text
+    return text
+
+from concurrent.futures import ThreadPoolExecutor
 
 TRANSLATION_PROCESS_OPTIONS = [
     "google_translator_batch",
-    "google_translator",
+    "deepl",
+    "mymemory",
     "gpt-3.5-turbo-0125_batch",
     "gpt-3.5-turbo-0125",
     "gpt-4-turbo-preview_batch",
@@ -141,7 +116,9 @@ TRANSLATION_PROCESS_OPTIONS = [
     "disable_translation",
 ]
 DOCS_TRANSLATION_PROCESS_OPTIONS = [
-    "google_translator",
+    "google_translator_batch",
+    "deepl",
+    "mymemory",
     "gpt-3.5-turbo-0125",
     "gpt-4-turbo-preview",
     "disable_translation",
@@ -150,42 +127,25 @@ DOCS_TRANSLATION_PROCESS_OPTIONS = [
 
 def translate_iterative(segments, target, source=None):
     """
-    Translate text segments individually to the specified language.
-
-    Parameters:
-    - segments (list): A list of dictionaries with 'text' as a key for
-        segment text.
-    - target (str): Target language code.
-    - source (str, optional): Source language code. Defaults to None.
-
-    Returns:
-    - list: Translated text segments in the target language.
-
-    Notes:
-    - Translates each segment using Google Translate.
-
-    Example:
-    segments = [{'text': 'first segment.'}, {'text': 'second segment.'}]
-    translated_segments = translate_iterative(segments, 'es')
+    Translate text segments concurrently to the specified language.
     """
-
     segments_ = copy.deepcopy(segments)
 
-    if (
-        not source
-    ):
+    if not source:
         logger.debug("No source language")
         source = "auto"
 
-    translator = GoogleTranslator(source=source, target=target)
+    def _translate_one(seg):
+        text = seg["text"].strip()
+        if not text:
+            return ""
+        return _mymemory_translate_with_retry(source, target, text)
 
-    for line in tqdm(range(len(segments_))):
-        text = segments_[line]["text"]
-        translated_line = translate_with_retry(
-            translator, text.strip(), source, target
-        )
-        segments_[line]["text"] = translated_line
-        time.sleep(0.25)
+    with ThreadPoolExecutor(max_workers=6) as executor:
+        results = list(tqdm(executor.map(_translate_one, segments_), total=len(segments_), desc="Translating (Parallel)"))
+
+    for i, res in enumerate(results):
+        segments_[i]["text"] = res
 
     return segments_
 
@@ -212,118 +172,10 @@ def verify_translate(
         return segments_copy
     else:
         logger.error(
-            "The translation failed, switching to google_translate iterative. "
+            "The translation failed, switching to MyMemory iterative. "
             f"{len(segments), len(translated_lines)}"
         )
         return translate_iterative(segments, target, source)
-
-
-def translate_batch(segments, target, chunk_size=2000, source=None):
-    """
-    Translate a batch of text segments into the specified language in chunks,
-        respecting the character limit.
-
-    Parameters:
-    - segments (list): List of dictionaries with 'text' as a key for segment
-        text.
-    - target (str): Target language code.
-    - chunk_size (int, optional): Maximum character limit for each translation
-        chunk (default is 2000; max 5000).
-    - source (str, optional): Source language code. Defaults to None.
-
-    Returns:
-    - list: Translated text segments in the target language.
-
-    Notes:
-    - Splits input segments into chunks respecting the character limit for
-        translation.
-    - Translates the chunks using Google Translate.
-    - If chunked translation fails, switches to iterative translation using
-        `translate_iterative()`.
-
-    Example:
-    segments = [{'text': 'first segment.'}, {'text': 'second segment.'}]
-    translated = translate_batch(segments, 'es', chunk_size=4000, source='en')
-    """
-
-    segments_copy = copy.deepcopy(segments)
-
-    if (
-        not source
-    ):
-        logger.debug("No source language")
-        source = "auto"
-
-    # Get text
-    text_lines = []
-    for line in range(len(segments_copy)):
-        text = segments_copy[line]["text"].strip()
-        text_lines.append(text)
-
-    # chunk limit
-    text_merge = []
-    actual_chunk = ""
-    global_text_list = []
-    actual_text_list = []
-    for one_line in text_lines:
-        one_line = " " if not one_line else one_line
-        if (len(actual_chunk) + len(one_line)) <= chunk_size:
-            if actual_chunk:
-                actual_chunk += " ||||| "
-            actual_chunk += one_line
-            actual_text_list.append(one_line)
-        else:
-            text_merge.append(actual_chunk)
-            actual_chunk = one_line
-            global_text_list.append(actual_text_list)
-            actual_text_list = [one_line]
-    if actual_chunk:
-        text_merge.append(actual_chunk)
-        global_text_list.append(actual_text_list)
-
-    # translate chunks
-    progress_bar = tqdm(total=len(segments), desc="Translating")
-    translator = GoogleTranslator(source=source, target=target)
-    split_list = []
-    try:
-        for text, text_iterable in zip(text_merge, global_text_list):
-            translated_line = translate_with_retry(
-                translator, text.strip(), source, target
-            )
-            split_text = translated_line.split("|||||")
-            if len(split_text) == len(text_iterable):
-                progress_bar.update(len(split_text))
-            else:
-                logger.debug(
-                    "Chunk fixing iteratively. Len chunk: "
-                    f"{len(split_text)}, expected: {len(text_iterable)}"
-                )
-                split_text = []
-                for txt_iter in text_iterable:
-                    translated_txt = translate_with_retry(
-                        translator, txt_iter.strip(), source, target
-                    )
-                    split_text.append(translated_txt)
-                    progress_bar.update(1)
-                    time.sleep(0.25)
-            split_list.append(split_text)
-            time.sleep(0.25)
-        progress_bar.close()
-    except Exception as error:
-        progress_bar.close()
-        logger.error(str(error))
-        logger.warning(
-            "The translation in chunks failed, switching to iterative."
-            " Related: too many request"
-        )  # use proxy or less chunk size
-        return translate_iterative(segments, target, source)
-
-    # un chunk
-    translated_lines = list(chain.from_iterable(split_list))
-
-    return verify_translate(
-        segments, segments_copy, translated_lines, target, source
-    )
 
 
 def _quality_check_translation(original_text, translated_text, start=None):
@@ -531,15 +383,12 @@ def gpt_sequential(segments, model, target, source=None):
         except Exception as error:
             logger.error(
                 f"{str(error)} >> The text of segment {start} "
-                "is being corrected with Google Translate"
+                "is being corrected with MyMemory"
             )
-            translator = GoogleTranslator(
-                source=fixed_source, target=fixed_target
+            translated_text = _mymemory_translate_with_retry(
+                fixed_source, fixed_target, text.strip()
             )
-            translated_text = translate_with_retry(
-                translator, text.strip(), fixed_source, fixed_target
-            )
-            time.sleep(0.25)
+            time.sleep(0.4)
 
         translated_segments[i]["text"] = translated_text.strip()
         progress_bar.update(1)
@@ -689,29 +538,218 @@ def gpt_batch(segments, model, target, token_batch_limit=900, source=None):
                 first_start = segments_copy[max(0, i-(batch_lines-1))]["start"]
                 logger.warning(
                     f"The batch from {first_start} to {last_start} "
-                    "failed, is being corrected with Google Translate"
-                )
-
-                translator = GoogleTranslator(
-                    source=fixed_source,
-                    target=fixed_target
+                    "failed, is being corrected with MyMemory"
                 )
 
                 for txt_source in batch_conversation["conversation"]:
-                    translated_txt = translate_with_retry(
-                        translator,
-                        list(txt_source.values())[0].strip(),
+                    translated_txt = _mymemory_translate_with_retry(
                         fixed_source,
                         fixed_target,
+                        list(txt_source.values())[0].strip(),
                     )
                     translated_lines.append(translated_txt.strip())
                     progress_bar.update(1)
-                    time.sleep(0.25)
+                    time.sleep(0.4)
 
     progress_bar.close()
 
     return verify_translate(
         segments, segments_copy, translated_lines, fixed_target, fixed_source
+    )
+
+
+DEEPL_ENV_VAR = "DEEPL_API_KEY"
+
+
+def _to_deepl_code(code, is_target):
+    """
+    DeepL expects uppercase codes, and for a handful of languages the
+    TARGET code needs a region variant (source doesn't).
+    """
+    code = code.upper()
+    if not is_target:
+        return code
+    if code == "EN":
+        return "EN-US"
+    if code == "PT":
+        return "PT-BR"
+    if code == "ZH":
+        return "ZH-HANS"
+    return code
+
+
+def translate_google_batch(segments, target, source=None, max_chars=4000):
+    """
+    Lightning-fast batch translation using Google's translate_a API.
+    Translates segments joined by delimiter in bulk HTTP requests.
+    Translates hundreds of lines in under 1 second without rate limits.
+    """
+    segments_copy = copy.deepcopy(segments)
+    target_lang = fix_code_language(target)
+    source_lang = fix_code_language(source) if source else "auto"
+
+    DELIMITER = "\n||||\n"
+    translated_lines = []
+
+    chunks = []
+    current_chunk = []
+    current_length = 0
+
+    for seg in segments_copy:
+        text = seg["text"].strip() or " "
+        line_len = len(text) + len(DELIMITER)
+        if current_length + line_len > max_chars and current_chunk:
+            chunks.append(current_chunk)
+            current_chunk = [text]
+            current_length = line_len
+        else:
+            current_chunk.append(text)
+            current_length += line_len
+    if current_chunk:
+        chunks.append(current_chunk)
+
+    session = requests.Session()
+    session.headers.update({
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+    })
+
+    progress_bar = tqdm(total=len(segments_copy), desc="Translating (Google Fast Batch)")
+    for chunk in chunks:
+        joined_text = DELIMITER.join(chunk)
+        chunk_translated = False
+        try:
+            resp = session.get(
+                "https://translate.googleapis.com/translate_a/single",
+                params={
+                    "client": "gtx",
+                    "sl": source_lang,
+                    "tl": target_lang,
+                    "dt": "t",
+                    "q": joined_text,
+                },
+                timeout=15,
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                full_translated = "".join(part[0] for part in data[0] if part and part[0])
+                split_translated = full_translated.split("||||")
+                if len(split_translated) == len(chunk):
+                    translated_lines.extend(t.strip() for t in split_translated)
+                    chunk_translated = True
+        except Exception as err:
+            logger.debug(f"Google delimiter batch failed: {err}")
+
+        if not chunk_translated:
+            # Parallel line-by-line fallback for this chunk
+            def _trans_line(t):
+                if not t.strip():
+                    return ""
+                try:
+                    r = session.get(
+                        "https://translate.googleapis.com/translate_a/single",
+                        params={"client": "gtx", "sl": source_lang, "tl": target_lang, "dt": "t", "q": t},
+                        timeout=10,
+                    )
+                    return "".join(p[0] for p in r.json()[0] if p and p[0]).strip()
+                except Exception:
+                    return t
+            with ThreadPoolExecutor(max_workers=6) as ex:
+                translated_lines.extend(list(ex.map(_trans_line, chunk)))
+
+        progress_bar.update(len(chunk))
+
+    progress_bar.close()
+
+    return verify_translate(
+        segments, segments_copy, translated_lines,
+        target_lang, source_lang
+    )
+
+
+def translate_deepl_batch(segments, target, source=None, batch_size=50):
+    """
+    Translate segments using the DeepL API (real per-request batching).
+    Requires a DEEPL_API_KEY environment variable.
+    Falls back to translate_google_batch if no key or DeepL fails.
+    """
+    api_key = os.environ.get(DEEPL_ENV_VAR)
+    if not api_key:
+        logger.warning(
+            f"No {DEEPL_ENV_VAR} set, falling back to Google Fast Batch"
+        )
+        return translate_google_batch(segments, target, source)
+
+    segments_copy = copy.deepcopy(segments)
+    base_url = (
+        "https://api-free.deepl.com/v2/translate"
+        if api_key.endswith(":fx")
+        else "https://api.deepl.com/v2/translate"
+    )
+    target_lang = _to_deepl_code(fix_code_language(target), is_target=True)
+    source_lang = (
+        _to_deepl_code(fix_code_language(source), is_target=False)
+        if source
+        else None
+    )
+
+    text_lines = [line["text"].strip() or " " for line in segments_copy]
+    translated_lines = []
+    progress_bar = tqdm(total=len(text_lines), desc="Translating (DeepL Batch)")
+    session = requests.Session()
+
+    for i in range(0, len(text_lines), batch_size):
+        chunk = text_lines[i:i + batch_size]
+        data = [("text", t) for t in chunk]
+        data.append(("target_lang", target_lang))
+        if source_lang:
+            data.append(("source_lang", source_lang))
+
+        last_error = None
+        for attempt in range(3):
+            try:
+                response = session.post(
+                    base_url,
+                    headers={"Authorization": f"DeepL-Auth-Key {api_key}"},
+                    data=data,
+                    timeout=30,
+                )
+                if response.status_code == 429 or response.status_code == 456:
+                    raise TooManyRequests()
+                response.raise_for_status()
+                result = response.json()
+                translated_lines.extend(
+                    t["text"] for t in result["translations"]
+                )
+                last_error = None
+                break
+            except TooManyRequests as error:
+                last_error = error
+                delay = 2 * (attempt + 1)
+                logger.warning(
+                    f"DeepL rate limit hit, retrying in {delay}s "
+                    f"(attempt {attempt + 1}/3)"
+                )
+                time.sleep(delay)
+            except Exception as error:
+                last_error = error
+                break
+
+        if last_error is not None:
+            logger.warning(
+                "DeepL translation failed for this chunk, using Google Fast Batch fallback. "
+                f"Related: {last_error}"
+            )
+            fallback_segs = [{"text": t} for t in chunk]
+            fallback_res = translate_google_batch(fallback_segs, target, source)
+            translated_lines.extend([f["text"] for f in fallback_res])
+
+        progress_bar.update(len(chunk))
+
+    progress_bar.close()
+
+    return verify_translate(
+        segments, segments_copy, translated_lines,
+        fix_code_language(target), fix_code_language(source)
     )
 
 
@@ -726,13 +764,10 @@ def translate_text(
     """Translates text segments using a specified process."""
     match translation_process:
         case "google_translator_batch":
-            return translate_batch(
-                segments,
-                fix_code_language(target),
-                chunk_size,
-                fix_code_language(source)
-            )
-        case "google_translator":
+            return translate_google_batch(segments, target, source)
+        case "deepl":
+            return translate_deepl_batch(segments, target, source)
+        case "mymemory":
             return translate_iterative(
                 segments,
                 fix_code_language(target),

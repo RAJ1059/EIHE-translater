@@ -7,6 +7,29 @@ from soni_translate.logging_setup import (
 import whisperx
 import torch
 import os
+
+
+def _load_dotenv():
+    """
+    Loads KEY=VALUE pairs from a local .env file (if present) into
+    os.environ, without overriding variables already set in the
+    environment. Keeps API keys (e.g. DEEPL_API_KEY, OPENAI_API_KEY)
+    out of git-tracked files while still surviving app restarts.
+    """
+    env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
+    if not os.path.isfile(env_path):
+        return
+    with open(env_path, encoding="utf-8") as env_file:
+        for line in env_file:
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, _, value = line.partition("=")
+            os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
+
+
+_load_dotenv()
+
 from soni_translate.audio_segments import create_translated_audio
 from soni_translate.text_to_speech import (
     audio_segmentation_to_voice,
@@ -427,7 +450,7 @@ class SoniTranslate(SoniTrCache):
         target_language="English (en)",
         min_speakers=1,
         max_speakers=1,
-        tts_voice00="en-US-EmmaMultilingualNeural-Female",
+        tts_voice00="en-US-AvaMultilingualNeural-Female",
         tts_voice01="en-US-AndrewMultilingualNeural-Male",
         tts_voice02="en-US-AvaMultilingualNeural-Female",
         tts_voice03="en-US-BrianMultilingualNeural-Male",
@@ -441,7 +464,7 @@ class SoniTranslate(SoniTrCache):
         tts_voice11="en-US-AndrewMultilingualNeural-Male",
         video_output_name="",
         mix_method_audio="Adjusting volumes and mixing audio",
-        max_accelerate_audio=1.3,
+        max_accelerate_audio=2.5,
         acceleration_rate_regulation=True,
         volume_original_audio=0.25,
         volume_translated_audio=1.80,
@@ -1297,9 +1320,9 @@ class SoniTranslate(SoniTrCache):
         directory_input="",  # doc path
         origin_language="English (en)",
         target_language="English (en)",
-        tts_voice00="en-US-EmmaMultilingualNeural-Female",
+        tts_voice00="en-US-AvaMultilingualNeural-Female",
         name_final_file="",
-        translate_process="google_translator",
+        translate_process="deepl",
         output_type="audio",
         chunk_size=None,
         custom_voices=False,
@@ -1581,7 +1604,7 @@ def create_gui(theme, logs_in_gui=False):
 
                     tts_voice00 = gr.Dropdown(
                         SoniTr.tts_info.tts_list(),
-                        value="en-US-AndrewMultilingualNeural-Male",
+                        value="en-US-AvaMultilingualNeural-Female",
                         label=lg_conf["sk1"],
                         visible=True,
                         interactive=True,
@@ -1782,7 +1805,7 @@ def create_gui(theme, logs_in_gui=False):
                         ):
                             audio_accelerate = gr.Slider(
                                 label=lg_conf["acc_max_label"],
-                                value=2.0,
+                                value=2.5,
                                 step=0.1,
                                 minimum=1.0,
                                 maximum=2.5,
@@ -1885,7 +1908,9 @@ def create_gui(theme, logs_in_gui=False):
                                 minimum=1,
                                 maximum=30,
                             )
-                            whisper_model_default = "medium"
+                            whisper_model_default = (
+                                "base" if SoniTr.device == "cpu" else "medium"
+                            )
 
                             WHISPER_MODEL_SIZE = gr.Dropdown(
                                 ASR_MODEL_OPTIONS + find_whisper_models(),
@@ -1897,7 +1922,7 @@ def create_gui(theme, logs_in_gui=False):
                             com_t_opt, com_t_default = (
                                 [COMPUTE_TYPE_GPU, "float16"]
                                 if SoniTr.device == "cuda"
-                                else [COMPUTE_TYPE_CPU, "float32"]
+                                else [COMPUTE_TYPE_CPU, "int8"]
                             )
                             compute_type = gr.Dropdown(
                                 com_t_opt,

@@ -154,12 +154,19 @@ def edge_tts_voices_list():
     return formatted_voices
 
 
+EDGE_TTS_FEMALE_PITCH = "+15Hz"
+
+
 def segments_egde_tts(filtered_edge_segments, TRANSLATE_AUDIO_TO, is_gui):
     for segment in tqdm(filtered_edge_segments["segments"]):
         speaker = segment["speaker"] # noqa
         text = segment["text"]
         start = segment["start"]
         tts_name = segment["tts_name"]
+
+        pitch = (
+            EDGE_TTS_FEMALE_PITCH if tts_name.endswith("-Female") else "+0Hz"
+        )
 
         # make the tts audio
         filename = f"audio/{start}.ogg"
@@ -170,12 +177,14 @@ def segments_egde_tts(filtered_edge_segments, TRANSLATE_AUDIO_TO, is_gui):
             if is_gui:
                 asyncio.run(
                     edge_tts.Communicate(
-                        text, "-".join(tts_name.split("-")[:-1])
+                        text,
+                        "-".join(tts_name.split("-")[:-1]),
+                        pitch=pitch,
                     ).save(temp_file)
                 )
             else:
                 # nest_asyncio.apply() if not is_gui else None
-                command = f'edge-tts -t "{text}" -v "{tts_name.replace("-Male", "").replace("-Female", "")}" --write-media "{temp_file}"'
+                command = f'edge-tts -t "{text}" -v "{tts_name.replace("-Male", "").replace("-Female", "")}" --pitch="{pitch}" --write-media "{temp_file}"'
                 run_command(command)
             verify_saved_file_and_size(temp_file)
 
