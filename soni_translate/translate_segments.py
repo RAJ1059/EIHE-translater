@@ -105,24 +105,51 @@ def _mymemory_translate_with_retry(source, target, text, max_retries=2, base_del
 
 from concurrent.futures import ThreadPoolExecutor
 
-TRANSLATION_PROCESS_OPTIONS = [
-    "google_translator_batch",
-    "deepl",
-    "mymemory",
-    "gpt-3.5-turbo-0125_batch",
-    "gpt-3.5-turbo-0125",
-    "gpt-4-turbo-preview_batch",
-    "gpt-4-turbo-preview",
-    "disable_translation",
-]
-DOCS_TRANSLATION_PROCESS_OPTIONS = [
-    "google_translator_batch",
-    "deepl",
-    "mymemory",
-    "gpt-3.5-turbo-0125",
-    "gpt-4-turbo-preview",
-    "disable_translation",
-]
+DEEPL_ENV_VAR = "DEEPL_API_KEY"
+
+TRANSLATION_PROCESS_OPTIONS = (
+    [
+        "deepl",
+        "google_translator_batch",
+        "mymemory",
+        "gpt-3.5-turbo-0125_batch",
+        "gpt-3.5-turbo-0125",
+        "gpt-4-turbo-preview_batch",
+        "gpt-4-turbo-preview",
+        "disable_translation",
+    ]
+    if os.environ.get(DEEPL_ENV_VAR)
+    else [
+        "google_translator_batch",
+        "deepl",
+        "mymemory",
+        "gpt-3.5-turbo-0125_batch",
+        "gpt-3.5-turbo-0125",
+        "gpt-4-turbo-preview_batch",
+        "gpt-4-turbo-preview",
+        "disable_translation",
+    ]
+)
+
+DOCS_TRANSLATION_PROCESS_OPTIONS = (
+    [
+        "deepl",
+        "google_translator_batch",
+        "mymemory",
+        "gpt-3.5-turbo-0125",
+        "gpt-4-turbo-preview",
+        "disable_translation",
+    ]
+    if os.environ.get(DEEPL_ENV_VAR)
+    else [
+        "google_translator_batch",
+        "deepl",
+        "mymemory",
+        "gpt-3.5-turbo-0125",
+        "gpt-4-turbo-preview",
+        "disable_translation",
+    ]
+)
 
 
 def translate_iterative(segments, target, source=None):
@@ -150,6 +177,30 @@ def translate_iterative(segments, target, source=None):
     return segments_
 
 
+def normalize_translated_text(text: str) -> str:
+    """
+    Cleans up smart quotes, em-dashes, and special Unicode characters
+    to ensure clean TTS audio synthesis and subtitle rendering.
+    """
+    if not isinstance(text, str) or not text:
+        return text or ""
+    replacements = [
+        ("\u2019", "'"),
+        ("\u2018", "'"),
+        ("\u201c", '"'),
+        ("\u201d", '"'),
+        ("\u2014", " - "),
+        ("\u2013", " - "),
+        ("\u2026", "..."),
+        ("\u00a0", " "),
+        ("\ufffd", "'"),
+    ]
+    for old, new in replacements:
+        if old:
+            text = text.replace(old, new)
+    return text.strip()
+
+
 def verify_translate(
     segments,
     segments_copy,
@@ -161,7 +212,18 @@ def verify_translate(
     Verify integrity and translate segments if lengths match, otherwise
     switch to iterative translation.
     """
+    translated_lines = [normalize_translated_text(t) for t in translated_lines]
+
     if len(segments) == len(translated_lines):
+        # Integrity check: make sure translation actually occurred when source != target
+        non_empty_src = [s["text"].strip() for s in segments_copy if s["text"].strip()]
+        non_empty_trans = [t.strip() for t in translated_lines if t.strip()]
+        if source and target and fix_code_language(source).lower() != fix_code_language(target).lower() and non_empty_src and non_empty_src == non_empty_trans:
+            logger.warning("Translation output is identical to source text (translator rate limit or failure). Switching to fallback...")
+            if os.environ.get(DEEPL_ENV_VAR):
+                return translate_deepl_batch(segments, target, source)
+            return translate_iterative(segments, target, source)
+
         for line in range(len(segments_copy)):
             logger.debug(
                 f"{segments_copy[line]['text']} >> "
@@ -172,9 +234,11 @@ def verify_translate(
         return segments_copy
     else:
         logger.error(
-            "The translation failed, switching to MyMemory iterative. "
+            "The translation failed, switching to fallback. "
             f"{len(segments), len(translated_lines)}"
         )
+        if os.environ.get(DEEPL_ENV_VAR):
+            return translate_deepl_batch(segments, target, source)
         return translate_iterative(segments, target, source)
 
 
@@ -637,24 +701,14 @@ def translate_google_batch(segments, target, source=None, max_chars=4000):
                     translated_lines.extend(t.strip() for t in split_translated)
                     chunk_translated = True
         except Exception as err:
-            logger.debug(f"Google delimiter batch failed: {err}")
+            logger.warning(f"Google delimiter batch failed: {err}")
 
         if not chunk_translated:
-            # Parallel line-by-line fallback for this chunk
-            def _trans_line(t):
-                if not t.strip():
-                    return ""
-                try:
-                    r = session.get(
-                        "https://translate.googleapis.com/translate_a/single",
-                        params={"client": "gtx", "sl": source_lang, "tl": target_lang, "dt": "t", "q": t},
-                        timeout=10,
-                    )
-                    return "".join(p[0] for p in r.json()[0] if p and p[0]).strip()
-                except Exception:
-                    return t
-            with ThreadPoolExecutor(max_workers=6) as ex:
-                translated_lines.extend(list(ex.map(_trans_line, chunk)))
+            progress_bar.close()
+            logger.warning("Google translation failed or rate limited (429). Switching to alternative translator...")
+            if os.environ.get(DEEPL_ENV_VAR):
+                return translate_deepl_batch(segments, target, source)
+            return translate_iterative(segments, target, source)
 
         progress_bar.update(len(chunk))
 
@@ -718,7 +772,7 @@ def translate_deepl_batch(segments, target, source=None, batch_size=50):
                 response.raise_for_status()
                 result = response.json()
                 translated_lines.extend(
-                    t["text"] for t in result["translations"]
+                    normalize_translated_text(t["text"]) for t in result["translations"]
                 )
                 last_error = None
                 break
@@ -756,12 +810,15 @@ def translate_deepl_batch(segments, target, source=None, batch_size=50):
 def translate_text(
     segments,
     target,
-    translation_process="google_translator_batch",
+    translation_process=None,
     chunk_size=4500,
     source=None,
     token_batch_limit=1000,
 ):
     """Translates text segments using a specified process."""
+    if not translation_process or translation_process == "google_translator_batch":
+        translation_process = "deepl" if os.environ.get(DEEPL_ENV_VAR) else "google_translator_batch"
+
     match translation_process:
         case "google_translator_batch":
             return translate_google_batch(segments, target, source)

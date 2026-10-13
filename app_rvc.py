@@ -477,7 +477,7 @@ class SoniTranslate(SoniTrCache):
         literalize_numbers=True,
         segment_duration_limit=15,
         diarization_model="pyannote_2.1",
-        translate_process="google_translator_batch",
+        translate_process=None,
         subtitle_file=None,
         output_type="video (mp4)",
         voiceless_track=False,
@@ -870,6 +870,8 @@ class SoniTranslate(SoniTrCache):
                     chunk_size=1800,
                     source=lang_source,
                 )
+                if self.result_diarize["segments"]:
+                    logger.info(f"Translated to '{TRANSLATE_AUDIO_TO}'. Sample: '{self.result_diarize['segments'][0]['text']}'")
                 logger.debug("Translation complete")
                 logger.debug(self.result_diarize)
 
@@ -1056,6 +1058,8 @@ class SoniTranslate(SoniTrCache):
 
             # Voice Imitation (Tone color converter)
             if voice_imitation:
+                if not torch.cuda.is_available():
+                    voice_imitation_max_segments = min(int(voice_imitation_max_segments), 1)
                 prog_disp(
                     "Voice Imitation...", 0.85, is_gui, progress=progress
                 )
@@ -1604,21 +1608,21 @@ def create_gui(theme, logs_in_gui=False):
 
                     tts_voice00 = gr.Dropdown(
                         SoniTr.tts_info.tts_list(),
-                        value="en-US-AvaMultilingualNeural-Female",
+                        value="en-US-JennyNeural-Female",
                         label=lg_conf["sk1"],
                         visible=True,
                         interactive=True,
                     )
                     tts_voice01 = gr.Dropdown(
                         SoniTr.tts_info.tts_list(),
-                        value="en-US-AvaMultilingualNeural-Female",
+                        value="en-US-JennyNeural-Female",
                         label=lg_conf["sk2"],
                         visible=True,
                         interactive=True,
                     )
                     tts_voice02 = gr.Dropdown(
                         SoniTr.tts_info.tts_list(),
-                        value="en-US-AvaMultilingualNeural-Female",
+                        value="en-US-JennyNeural-Female",
                         label=lg_conf["sk3"],
                         visible=False,
                         interactive=True,
@@ -1711,10 +1715,13 @@ def create_gui(theme, logs_in_gui=False):
                             open=False,
                         ):
                             gr.Markdown(lg_conf["vc_subtitle"])
+                            vc_active_info = lg_conf["vc_active_info"]
+                            if not torch.cuda.is_available():
+                                vc_active_info += " | ⚠️ Extremely slow on CPU (takes 5+ mins). KEEP UNCHECKED for fast 10-15s translation!"
                             voice_imitation_gui = gr.Checkbox(
                                 False,
                                 label=lg_conf["vc_active_label"],
-                                info=lg_conf["vc_active_info"],
+                                info=vc_active_info,
                             )
                             openvoice_models = ["openvoice", "openvoice_v2"]
                             voice_imitation_method_options = (

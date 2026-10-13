@@ -503,7 +503,12 @@ def rename_file(current_name, new_name):
 
     if os.path.exists(current_name):
         dir_new_name_file = os.path.join(file_directory, new_name)
-        os.rename(current_name, dir_new_name_file)
+        if os.path.exists(dir_new_name_file):
+            try:
+                os.remove(dir_new_name_file)
+            except Exception:
+                pass
+        os.replace(current_name, dir_new_name_file)
         logger.debug(f"File '{current_name}' renamed to '{new_name}'.")
         return dir_new_name_file
     else:

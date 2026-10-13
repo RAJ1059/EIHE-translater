@@ -154,12 +154,18 @@ def edge_tts_voices_list():
     return formatted_voices
 
 
-EDGE_TTS_FEMALE_PITCH = "+15Hz"
+EDGE_TTS_FEMALE_PITCH = os.getenv("EDGE_TTS_FEMALE_PITCH", "+35Hz")
 
+
+import concurrent.futures
 
 def segments_egde_tts(filtered_edge_segments, TRANSLATE_AUDIO_TO, is_gui):
-    for segment in tqdm(filtered_edge_segments["segments"]):
-        speaker = segment["speaker"] # noqa
+    segments = filtered_edge_segments.get("segments", [])
+    if not segments:
+        return
+
+    def process_single_segment(segment):
+        speaker = segment["speaker"]  # noqa
         text = segment["text"]
         start = segment["start"]
         tts_name = segment["tts_name"]
@@ -175,13 +181,15 @@ def segments_egde_tts(filtered_edge_segments, TRANSLATE_AUDIO_TO, is_gui):
         logger.info(f"{text} >> {filename}")
         try:
             if is_gui:
-                asyncio.run(
-                    edge_tts.Communicate(
+                async def _save():
+                    comm = edge_tts.Communicate(
                         text,
                         "-".join(tts_name.split("-")[:-1]),
                         pitch=pitch,
-                    ).save(temp_file)
-                )
+                    )
+                    await comm.save(temp_file)
+
+                asyncio.run(_save())
             else:
                 # nest_asyncio.apply() if not is_gui else None
                 command = f'edge-tts -t "{text}" -v "{tts_name.replace("-Male", "").replace("-Female", "")}" --pitch="{pitch}" --write-media "{temp_file}"'
@@ -204,6 +212,10 @@ def segments_egde_tts(filtered_edge_segments, TRANSLATE_AUDIO_TO, is_gui):
 
         except Exception as error:
             error_handling_in_tts(error, segment, TRANSLATE_AUDIO_TO, filename)
+
+    max_workers = min(6, len(segments))
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+        list(tqdm(executor.map(process_single_segment, segments), total=len(segments)))
 
 
 # =====================================
@@ -505,16 +517,18 @@ def create_wav_file_vc(
         # Complete file
         audio_segment = audio_wav
 
-    from .mdx_net import process_uvr_task
-
-    try:
-        _, _, _, _, audio_segment = process_uvr_task(
-            orig_song_path=audio_segment,
-            main_vocals=True,
-            dereverb=get_vocals_dereverb,
-        )
-    except Exception as error:
-        logger.error(str(error))
+    if torch.cuda.is_available() or os.environ.get("SONITR_UVR_CPU", "False").lower() == "true":
+        try:
+            from .mdx_net import process_uvr_task
+            _, _, _, _, audio_segment = process_uvr_task(
+                orig_song_path=audio_segment,
+                main_vocals=True,
+                dereverb=get_vocals_dereverb,
+            )
+        except Exception as error:
+            logger.error(str(error))
+    else:
+        logger.info("CPU detected: Skipping heavy UVR audio separation to keep translation fast.")
 
     sample = convert_to_xtts_good_sample(audio_segment)
 
