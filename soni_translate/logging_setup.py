@@ -38,6 +38,8 @@ def set_logging_level(verbosity_level):
 
 
 def configure_logging_libs(debug=False):
+    warnings.filterwarnings("ignore", category=FutureWarning)
+    warnings.filterwarnings("ignore", category=UserWarning)
     warnings.filterwarnings(
         action="ignore", category=UserWarning, module="pyannote"
     )
@@ -52,8 +54,25 @@ def configure_logging_libs(debug=False):
     ]
     try:
         for module in modules:
-            logging.getLogger(module).setLevel(logging.WARNING)
+            level = logging.ERROR if module in ["speechbrain", "fairseq"] else logging.WARNING
+            logging.getLogger(module).setLevel(level)
         os.environ['TF_CPP_MIN_LOG_LEVEL'] = "3" if not debug else "1"
+
+        # Silence Windows asyncio WinError 10054 connection reset noise
+        if sys.platform == "win32":
+            try:
+                from asyncio.proactor_events import _ProactorBasePipeTransport
+                _orig_ccl = _ProactorBasePipeTransport._call_connection_lost
+
+                def _safe_ccl(self, exc):
+                    try:
+                        return _orig_ccl(self, exc)
+                    except (ConnectionResetError, OSError):
+                        pass
+
+                _ProactorBasePipeTransport._call_connection_lost = _safe_ccl
+            except Exception:
+                pass
 
         # Compatibility shims for torchaudio / pyannote
         try:

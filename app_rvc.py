@@ -1608,21 +1608,21 @@ def create_gui(theme, logs_in_gui=False):
 
                     tts_voice00 = gr.Dropdown(
                         SoniTr.tts_info.tts_list(),
-                        value="en-US-JennyNeural-Female",
+                        value="en-US-AvaMultilingualNeural-Female",
                         label=lg_conf["sk1"],
                         visible=True,
                         interactive=True,
                     )
                     tts_voice01 = gr.Dropdown(
                         SoniTr.tts_info.tts_list(),
-                        value="en-US-JennyNeural-Female",
+                        value="en-US-AvaMultilingualNeural-Female",
                         label=lg_conf["sk2"],
                         visible=True,
                         interactive=True,
                     )
                     tts_voice02 = gr.Dropdown(
                         SoniTr.tts_info.tts_list(),
-                        value="en-US-JennyNeural-Female",
+                        value="en-US-AvaMultilingualNeural-Female",
                         label=lg_conf["sk3"],
                         visible=False,
                         interactive=True,
