@@ -1,4 +1,5 @@
 import gradio as gr
+import soni_translate
 from soni_translate.logging_setup import (
     logger,
     set_logging_level,

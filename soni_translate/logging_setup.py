@@ -105,6 +105,7 @@ def configure_logging_libs(debug=False):
         # Compatibility patch for PyTorch 2.6+ weights_only loading in pyannote / whisperx
         try:
             import torch
+            import torch._utils
             _orig_torch_load = torch.load
 
             def _safe_torch_load(*args, **kwargs):

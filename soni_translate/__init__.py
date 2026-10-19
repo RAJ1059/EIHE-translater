@@ -34,6 +34,7 @@ except Exception:
 
 try:
     import torch
+    import torch._utils
     # Ensure PyTorch 2.6+ unpickler always loads models with weights_only=False
     _orig_torch_load = torch.load
 
