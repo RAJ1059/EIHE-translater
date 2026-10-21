@@ -13,7 +13,7 @@ ERROR_INCORRECT_CODEC_PARAMETERS = [
 
 TESTED_CODECS = [
     "h264",  # mp4
-    "h265",  # mp4
+    "h265",  # m    p4
     "hevc",
     "vp9",  # webm
     "mpeg4",  # mp4
