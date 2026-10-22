@@ -155,6 +155,7 @@ def edge_tts_voices_list():
 
 
 EDGE_TTS_FEMALE_PITCH = os.getenv("EDGE_TTS_FEMALE_PITCH", "+25Hz")
+EDGE_TTS_MALE_PITCH = os.getenv("EDGE_TTS_MALE_PITCH", "+0Hz")
 
 
 import concurrent.futures
@@ -171,8 +172,9 @@ def segments_egde_tts(filtered_edge_segments, TRANSLATE_AUDIO_TO, is_gui):
         tts_name = segment["tts_name"]
 
         female_pitch = os.getenv("EDGE_TTS_FEMALE_PITCH", "+25Hz")
+        male_pitch = os.getenv("EDGE_TTS_MALE_PITCH", "+0Hz")
         pitch = (
-            female_pitch if tts_name.endswith("-Female") else "+0Hz"
+            female_pitch if tts_name.endswith("-Female") else male_pitch
         )
 
         # make the tts audio

@@ -451,7 +451,7 @@ class SoniTranslate(SoniTrCache):
         target_language="English (en)",
         min_speakers=1,
         max_speakers=1,
-        tts_voice00="en-US-AvaMultilingualNeural-Female",
+        tts_voice00="en-US-AndrewMultilingualNeural-Male",
         tts_voice01="en-US-AndrewMultilingualNeural-Male",
         tts_voice02="en-US-AvaMultilingualNeural-Female",
         tts_voice03="en-US-BrianMultilingualNeural-Male",
@@ -473,7 +473,7 @@ class SoniTranslate(SoniTrCache):
         get_translated_text=False,
         get_video_from_text_json=False,
         text_json="{}",
-        avoid_overlap=False,
+        avoid_overlap=True,
         vocal_refinement=False,
         literalize_numbers=True,
         segment_duration_limit=15,
@@ -484,7 +484,7 @@ class SoniTranslate(SoniTrCache):
         voiceless_track=False,
         voice_imitation=False,
         voice_imitation_max_segments=3,
-        voice_imitation_vocals_dereverb=False,
+        voice_imitation_vocals_dereverb=True,
         voice_imitation_remove_previous=True,
         voice_imitation_method="freevc",
         dereverb_automatic_xtts=True,
@@ -1325,7 +1325,7 @@ class SoniTranslate(SoniTrCache):
         directory_input="",  # doc path
         origin_language="English (en)",
         target_language="English (en)",
-        tts_voice00="en-US-AvaMultilingualNeural-Female",
+        tts_voice00="en-US-AndrewMultilingualNeural-Male",
         name_final_file="",
         translate_process="deepl",
         output_type="audio",
@@ -1609,7 +1609,7 @@ def create_gui(theme, logs_in_gui=False):
 
                     tts_voice00 = gr.Dropdown(
                         SoniTr.tts_info.tts_list(),
-                        value="en-US-AvaMultilingualNeural-Female",
+                        value="en-US-AndrewMultilingualNeural-Male",
                         label=lg_conf["sk1"],
                         visible=True,
                         interactive=True,
@@ -1747,7 +1747,7 @@ def create_gui(theme, logs_in_gui=False):
                                 interactive=True,
                             )
                             voice_imitation_vocals_dereverb_gui = gr.Checkbox(
-                                False,
+                                True,
                                 label=lg_conf["vc_dereverb_label"],
                                 info=lg_conf["vc_dereverb_info"],
                             )
@@ -1827,7 +1827,7 @@ def create_gui(theme, logs_in_gui=False):
                                 info=lg_conf["acc_rate_info"],
                             )
                             avoid_overlap_gui = gr.Checkbox(
-                                False,
+                                True,
                                 label=lg_conf["or_label"],
                                 info=lg_conf["or_info"],
                             )
