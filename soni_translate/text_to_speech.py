@@ -154,7 +154,7 @@ def edge_tts_voices_list():
     return formatted_voices
 
 
-EDGE_TTS_FEMALE_PITCH = os.getenv("EDGE_TTS_FEMALE_PITCH", "+25Hz")
+EDGE_TTS_FEMALE_PITCH = os.getenv("EDGE_TTS_FEMALE_PITCH", "-30Hz")
 EDGE_TTS_MALE_PITCH = os.getenv("EDGE_TTS_MALE_PITCH", "+0Hz")
 
 
@@ -171,7 +171,7 @@ def segments_egde_tts(filtered_edge_segments, TRANSLATE_AUDIO_TO, is_gui):
         start = segment["start"]
         tts_name = segment["tts_name"]
 
-        female_pitch = os.getenv("EDGE_TTS_FEMALE_PITCH", "+25Hz")
+        female_pitch = os.getenv("EDGE_TTS_FEMALE_PITCH", "-30Hz")
         male_pitch = os.getenv("EDGE_TTS_MALE_PITCH", "+0Hz")
         pitch = (
             female_pitch if tts_name.endswith("-Female") else male_pitch
@@ -1185,15 +1185,16 @@ def accelerate_segments(
             except Exception as error:
                 logger.error(str(error))
 
-        if acc_percentage > max_accelerate_audio:
-            acc_percentage = max_accelerate_audio
-        elif acc_percentage <= 1.15 and acc_percentage >= 0.8:
+        if acc_percentage > 1.0:
+            # TTS is longer than the original segment duration. Speed up to match lip timing and preserve pauses.
+            acc_percentage = min(acc_percentage, max_accelerate_audio)
+            acc_percentage = round(acc_percentage, 2)
+        elif acc_percentage < 0.80:
+            # TTS is significantly shorter than the window. Slow down gently if natural.
+            acc_percentage = max(0.75, round(acc_percentage, 2))
+        else:
+            # TTS naturally fits within the window; preserve natural speech speed and pause.
             acc_percentage = 1.0
-        elif acc_percentage <= 0.79:
-            acc_percentage = max(0.6, acc_percentage)
-
-        # Round
-        acc_percentage = round(acc_percentage + 0.0, 1)
 
         # Format read if need
         if speaker in speakers_edge:
@@ -1201,12 +1202,23 @@ def accelerate_segments(
         else:
             info_enc = "OGG"
 
-        # Apply aceleration or opposite to the audio file in folder_output folder
+        # Apply acceleration or opposite to the audio file in folder_output folder
         if acc_percentage == 1.0 and info_enc == "OGG":
             copy_files(filename, f"{folder_output}{os.sep}audio")
         else:
+            # Chain atempo filters to safely handle any playback rate
+            speed = acc_percentage
+            filters = []
+            while speed > 2.0:
+                filters.append("atempo=2.0")
+                speed /= 2.0
+            while speed < 0.5:
+                filters.append("atempo=0.5")
+                speed /= 0.5
+            filters.append(f"atempo={speed:.3f}")
+            filter_str = ",".join(filters)
             os.system(
-                f"ffmpeg -y -loglevel panic -i {filename} -filter:a atempo={acc_percentage} {folder_output}/{filename}"
+                f'ffmpeg -y -loglevel panic -i {filename} -filter:a "{filter_str}" {folder_output}/{filename}'
             )
 
         if logger.isEnabledFor(logging.DEBUG):
@@ -1311,8 +1323,8 @@ def create_wav_vc(
                     create_wav_file_vc(
                         sample_name=name_new_wav,
                         audio_wav="audio.wav",
-                        start=(float(seg["start"]) + 1.0),
-                        end=(float(seg["end"]) - 1.0),
+                        start=(float(seg["start"]) + 0.1),
+                        end=(float(seg["end"]) - 0.1),
                         output_final_path=dir_path_speaker,
                         get_vocals_dereverb=get_vocals_dereverb,
                     )

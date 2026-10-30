@@ -13,7 +13,7 @@ ERROR_INCORRECT_CODEC_PARAMETERS = [
 
 TESTED_CODECS = [
     "h264",  # mp4
-    "h265",  # m    p4
+    "h265",  # mp4
     "hevc",
     "vp9",  # webm
     "mpeg4",  # mp4
@@ -58,7 +58,7 @@ def audio_preprocessor(preview, base_audio, audio_wav, use_cuda=False):
         )
         wav_ = f'ffmpeg -y -i "{base_audio}" -ss 00:00:20 -t 00:00:10 -vn -acodec pcm_s16le -ar 44100 -ac 2 audio.wav'
     else:
-        wav_ = f'ffmpeg -y -i "{base_audio}" -vn -acodec pcm_s16le -ar 44100 -ac 2 audio.wav'
+        wav_ = f'ffmpeg -y -i "{base_audio}" -af "aresample=async=1000:min_hard_comp=0.100000:first_pts=0" -vn -acodec pcm_s16le -ar 44100 -ac 2 audio.wav'
 
     # Run cmd process
     sub_params = {
@@ -124,7 +124,7 @@ def audio_video_preprocessor(
             )
             # https://github.com/yt-dlp/yt-dlp/issues/2220
             mp4_ = f'yt-dlp -f "mp4" --downloader ffmpeg --downloader-args "ffmpeg_i: -ss 00:00:20 -t 00:00:10" --force-overwrites --max-downloads 1 --no-warnings --no-playlist --no-abort-on-error --ignore-no-formats-error --restrict-filenames -o {OutputFile} {video}'
-            wav_ = "ffmpeg -y -i Video.mp4 -vn -acodec pcm_s16le -ar 44100 -ac 2 audio.wav"
+            wav_ = 'ffmpeg -y -i Video.mp4 -af "aresample=async=1000:min_hard_comp=0.100000:first_pts=0" -vn -acodec pcm_s16le -ar 44100 -ac 2 audio.wav'
         else:
             mp4_ = f'yt-dlp -f "mp4" --force-overwrites --max-downloads 1 --no-warnings --no-playlist --no-abort-on-error --ignore-no-formats-error --restrict-filenames -o {OutputFile} {video}'
             wav_ = f"python -m yt_dlp --output {audio_wav} --force-overwrites --max-downloads 1 --no-warnings --no-playlist --no-abort-on-error --ignore-no-formats-error --extract-audio --audio-format wav {video}"
@@ -150,7 +150,7 @@ def audio_video_preprocessor(
         ):
             raise OperationFailedError(f"Error processing video:\n{errors.decode('utf-8')}")
         logger.info("Process audio...")
-        wav_ = "ffmpeg -y -i Video.mp4 -vn -acodec pcm_s16le -ar 44100 -ac 2 audio.wav"
+        wav_ = 'ffmpeg -y -i Video.mp4 -af "aresample=async=1000:min_hard_comp=0.100000:first_pts=0" -vn -acodec pcm_s16le -ar 44100 -ac 2 audio.wav'
         wav_ = shlex.split(wav_)
         result_convert_audio = subprocess.Popen(wav_, **sub_params)
         output, errors = result_convert_audio.communicate()

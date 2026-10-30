@@ -451,7 +451,7 @@ class SoniTranslate(SoniTrCache):
         target_language="English (en)",
         min_speakers=1,
         max_speakers=1,
-        tts_voice00="en-US-AndrewMultilingualNeural-Male",
+        tts_voice00="en-US-AvaMultilingualNeural-Female",
         tts_voice01="en-US-AndrewMultilingualNeural-Male",
         tts_voice02="en-US-AvaMultilingualNeural-Female",
         tts_voice03="en-US-BrianMultilingualNeural-Male",
@@ -1325,7 +1325,7 @@ class SoniTranslate(SoniTrCache):
         directory_input="",  # doc path
         origin_language="English (en)",
         target_language="English (en)",
-        tts_voice00="en-US-AndrewMultilingualNeural-Male",
+        tts_voice00="en-US-AvaMultilingualNeural-Female",
         name_final_file="",
         translate_process="deepl",
         output_type="audio",
@@ -1609,7 +1609,7 @@ def create_gui(theme, logs_in_gui=False):
 
                     tts_voice00 = gr.Dropdown(
                         SoniTr.tts_info.tts_list(),
-                        value="en-US-AndrewMultilingualNeural-Male",
+                        value="en-US-AvaMultilingualNeural-Female",
                         label=lg_conf["sk1"],
                         visible=True,
                         interactive=True,
