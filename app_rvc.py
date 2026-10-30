@@ -1,3 +1,14 @@
+import os
+import sys
+
+_sys_site = r"C:\Users\shivr\AppData\Local\Programs\Python\Python310\lib\site-packages"
+import importlib.util
+# only borrow the system torch when the venv has none (loading both aborts on duplicate c10)
+if importlib.util.find_spec("torch") is None and os.path.exists(os.path.join(_sys_site, "torch")):
+    sys.path.insert(0, _sys_site)
+    sys.path.remove(_sys_site)
+import torch
+
 import gradio as gr
 import soni_translate
 from soni_translate.logging_setup import (
@@ -5,9 +16,8 @@ from soni_translate.logging_setup import (
     set_logging_level,
     configure_logging_libs,
 ); configure_logging_libs() # noqa
+
 import whisperx
-import torch
-import os
 
 
 def _load_dotenv():
@@ -26,7 +36,7 @@ def _load_dotenv():
             if not line or line.startswith("#") or "=" not in line:
                 continue
             key, _, value = line.partition("=")
-            os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
+            os.environ[key.strip()] = value.strip().strip('"').strip("'")
 
 
 _load_dotenv()
@@ -202,8 +212,15 @@ class TTS_Info:
         return list_tts
 
 
+_prog_t0 = [None]
+
+
 def prog_disp(msg, percent, is_gui, progress=None):
-    logger.info(msg)
+    import time
+    now = time.time()
+    if _prog_t0[0] is None or percent <= 0.15:
+        _prog_t0[0] = now
+    logger.info(f"{msg} [+{now - _prog_t0[0]:.0f}s]")
     if is_gui:
         progress(percent, desc=msg)
 
@@ -444,36 +461,36 @@ class SoniTranslate(SoniTrCache):
         directory_input="",
         YOUR_HF_TOKEN="",
         preview=False,
-        transcriber_model="large-v3",
-        batch_size=4,
-        compute_type="auto",
-        origin_language="Automatic detection",
+        transcriber_model="medium",
+        batch_size=8,
+        compute_type="int8",
+        origin_language="Spanish (es)",
         target_language="English (en)",
         min_speakers=1,
         max_speakers=1,
-        tts_voice00="en-US-AvaMultilingualNeural-Female",
+        tts_voice00="en-US-AndrewMultilingualNeural-Male",
         tts_voice01="en-US-AndrewMultilingualNeural-Male",
-        tts_voice02="en-US-AvaMultilingualNeural-Female",
-        tts_voice03="en-US-BrianMultilingualNeural-Male",
-        tts_voice04="de-DE-SeraphinaMultilingualNeural-Female",
-        tts_voice05="de-DE-FlorianMultilingualNeural-Male",
-        tts_voice06="fr-FR-VivienneMultilingualNeural-Female",
-        tts_voice07="fr-FR-RemyMultilingualNeural-Male",
-        tts_voice08="en-US-EmmaMultilingualNeural-Female",
+        tts_voice02="en-US-AndrewMultilingualNeural-Male",
+        tts_voice03="en-US-AndrewMultilingualNeural-Male",
+        tts_voice04="en-US-AndrewMultilingualNeural-Male",
+        tts_voice05="en-US-AndrewMultilingualNeural-Male",
+        tts_voice06="en-US-AndrewMultilingualNeural-Male",
+        tts_voice07="en-US-AndrewMultilingualNeural-Male",
+        tts_voice08="en-US-AndrewMultilingualNeural-Male",
         tts_voice09="en-US-AndrewMultilingualNeural-Male",
-        tts_voice10="en-US-EmmaMultilingualNeural-Female",
+        tts_voice10="en-US-AndrewMultilingualNeural-Male",
         tts_voice11="en-US-AndrewMultilingualNeural-Male",
         video_output_name="",
         mix_method_audio="Adjusting volumes and mixing audio",
         max_accelerate_audio=2.5,
-        acceleration_rate_regulation=True,
-        volume_original_audio=0.25,
+        acceleration_rate_regulation=False,
+        volume_original_audio=0.0,
         volume_translated_audio=1.80,
         output_format_subtitle="srt",
         get_translated_text=False,
         get_video_from_text_json=False,
         text_json="{}",
-        avoid_overlap=True,
+        avoid_overlap=False,
         vocal_refinement=False,
         literalize_numbers=True,
         segment_duration_limit=15,
@@ -483,10 +500,10 @@ class SoniTranslate(SoniTrCache):
         output_type="video (mp4)",
         voiceless_track=False,
         voice_imitation=False,
-        voice_imitation_max_segments=3,
+        voice_imitation_max_segments=1,
         voice_imitation_vocals_dereverb=True,
         voice_imitation_remove_previous=True,
-        voice_imitation_method="freevc",
+        voice_imitation_method="openvoice",
         dereverb_automatic_xtts=True,
         text_segmentation_scale="sentence",
         divide_text_segments_by="",
@@ -647,9 +664,9 @@ class SoniTranslate(SoniTrCache):
             )
 
         # Check GPU
-        if self.device == "cpu" and compute_type not in COMPUTE_TYPE_CPU:
-            logger.info("Compute type changed to float32")
-            compute_type = "float32"
+        if self.device == "cpu" and (compute_type not in COMPUTE_TYPE_CPU or compute_type == "auto"):
+            logger.info("Compute type set to int8 for fast CPU inference")
+            compute_type = "int8"
 
         base_video_file = "Video.mp4"
         base_audio_wav = "audio.wav"
@@ -782,9 +799,14 @@ class SoniTranslate(SoniTrCache):
                 )
 
                 self.align_language = self.result["language"]
+                need_alignment = (
+                    text_segmentation_scale in ["word", "character"]
+                    or max_speakers > 1
+                    or min_speakers > 1
+                )
                 if (
-                    not subtitle_file
-                    or text_segmentation_scale in ["word", "character"]
+                    need_alignment
+                    and (not subtitle_file or text_segmentation_scale in ["word", "character"])
                 ):
                     prog_disp("Aligning...", 0.45, is_gui, progress=progress)
                     try:
@@ -803,6 +825,8 @@ class SoniTranslate(SoniTrCache):
                             )
                     except Exception as error:
                         logger.error(str(error))
+                else:
+                    logger.info("Single-speaker sentence mode: skipping heavy wav2vec2 alignment to save 3+ minutes")
 
             if self.result["segments"] == []:
                 raise ValueError("No active speech found in audio")
@@ -1144,18 +1168,21 @@ class SoniTranslate(SoniTrCache):
         ], {}):
             # TYPE MIX AUDIO
             remove_files(mix_audio_file)
-            command_volume_mix = f'ffmpeg -y -i {base_audio_wav} -i {dub_audio_file} -filter_complex "[0:0]volume={volume_original_audio}[a];[1:0]volume={volume_translated_audio}[b];[a][b]amix=inputs=2:duration=longest" -c:a libmp3lame {mix_audio_file}'
-            command_background_mix = f'ffmpeg -i {base_audio_wav} -i {dub_audio_file} -filter_complex "[1:a]asplit=2[sc][mix];[0:a][sc]sidechaincompress=threshold=0.003:ratio=20[bg]; [bg][mix]amerge[final]" -map [final] {mix_audio_file}'
-            if mix_method_audio == "Adjusting volumes and mixing audio":
-                # volume mix
+            if float(volume_original_audio) == 0.0:
+                command_volume_mix = f'ffmpeg -y -i {dub_audio_file} -filter:a "volume={volume_translated_audio}" -c:a libmp3lame {mix_audio_file}'
+                run_command(command_volume_mix)
+            elif mix_method_audio == "Adjusting volumes and mixing audio":
+                command_volume_mix = f'ffmpeg -y -i {base_audio_wav} -i {dub_audio_file} -filter_complex "[0:0]volume={volume_original_audio}[a];[1:0]volume={volume_translated_audio}[b];[a][b]amix=inputs=2:duration=longest" -c:a libmp3lame {mix_audio_file}'
                 run_command(command_volume_mix)
             else:
+                command_background_mix = f'ffmpeg -i {base_audio_wav} -i {dub_audio_file} -filter_complex "[1:a]asplit=2[sc][mix];[0:a][sc]sidechaincompress=threshold=0.003:ratio=20[bg]; [bg][mix]amerge[final]" -map [final] {mix_audio_file}'
                 try:
                     # background mix
                     run_command(command_background_mix)
                 except Exception as error_mix:
                     # volume mix except
                     logger.error(str(error_mix))
+                    command_volume_mix = f'ffmpeg -y -i {base_audio_wav} -i {dub_audio_file} -filter_complex "[0:0]volume={volume_original_audio}[a];[1:0]volume={volume_translated_audio}[b];[a][b]amix=inputs=2:duration=longest" -c:a libmp3lame {mix_audio_file}'
                     run_command(command_volume_mix)
 
         if "audio" in output_type or is_audio_file(media_file):
@@ -1325,7 +1352,7 @@ class SoniTranslate(SoniTrCache):
         directory_input="",  # doc path
         origin_language="English (en)",
         target_language="English (en)",
-        tts_voice00="en-US-AvaMultilingualNeural-Female",
+        tts_voice00="en-US-AndrewMultilingualNeural-Male",
         name_final_file="",
         translate_process="deepl",
         output_type="audio",
@@ -1609,63 +1636,63 @@ def create_gui(theme, logs_in_gui=False):
 
                     tts_voice00 = gr.Dropdown(
                         SoniTr.tts_info.tts_list(),
-                        value="en-US-AvaMultilingualNeural-Female",
+                        value="en-US-AndrewMultilingualNeural-Male",
                         label=lg_conf["sk1"],
                         visible=True,
                         interactive=True,
                     )
                     tts_voice01 = gr.Dropdown(
                         SoniTr.tts_info.tts_list(),
-                        value="en-US-AvaMultilingualNeural-Female",
+                        value="en-US-AndrewMultilingualNeural-Male",
                         label=lg_conf["sk2"],
                         visible=True,
                         interactive=True,
                     )
                     tts_voice02 = gr.Dropdown(
                         SoniTr.tts_info.tts_list(),
-                        value="en-US-AvaMultilingualNeural-Female",
+                        value="en-US-AndrewMultilingualNeural-Male",
                         label=lg_conf["sk3"],
                         visible=False,
                         interactive=True,
                     )
                     tts_voice03 = gr.Dropdown(
                         SoniTr.tts_info.tts_list(),
-                        value="en-US-BrianMultilingualNeural-Male",
+                        value="en-US-AndrewMultilingualNeural-Male",
                         label=lg_conf["sk4"],
                         visible=False,
                         interactive=True,
                     )
                     tts_voice04 = gr.Dropdown(
                         SoniTr.tts_info.tts_list(),
-                        value="de-DE-SeraphinaMultilingualNeural-Female",
+                        value="en-US-AndrewMultilingualNeural-Male",
                         label=lg_conf["sk4"],
                         visible=False,
                         interactive=True,
                     )
                     tts_voice05 = gr.Dropdown(
                         SoniTr.tts_info.tts_list(),
-                        value="de-DE-FlorianMultilingualNeural-Male",
+                        value="en-US-AndrewMultilingualNeural-Male",
                         label=lg_conf["sk6"],
                         visible=False,
                         interactive=True,
                     )
                     tts_voice06 = gr.Dropdown(
                         SoniTr.tts_info.tts_list(),
-                        value="fr-FR-VivienneMultilingualNeural-Female",
+                        value="en-US-AndrewMultilingualNeural-Male",
                         label=lg_conf["sk7"],
                         visible=False,
                         interactive=True,
                     )
                     tts_voice07 = gr.Dropdown(
                         SoniTr.tts_info.tts_list(),
-                        value="fr-FR-RemyMultilingualNeural-Male",
+                        value="en-US-AndrewMultilingualNeural-Male",
                         label=lg_conf["sk8"],
                         visible=False,
                         interactive=True,
                     )
                     tts_voice08 = gr.Dropdown(
                         SoniTr.tts_info.tts_list(),
-                        value="en-US-EmmaMultilingualNeural-Female",
+                        value="en-US-AndrewMultilingualNeural-Male",
                         label=lg_conf["sk9"],
                         visible=False,
                         interactive=True,
@@ -1679,7 +1706,7 @@ def create_gui(theme, logs_in_gui=False):
                     )
                     tts_voice10 = gr.Dropdown(
                         SoniTr.tts_info.tts_list(),
-                        value="en-US-EmmaMultilingualNeural-Female",
+                        value="en-US-AndrewMultilingualNeural-Male",
                         label=lg_conf["sk11"],
                         visible=False,
                         interactive=True,
@@ -1717,8 +1744,6 @@ def create_gui(theme, logs_in_gui=False):
                         ):
                             gr.Markdown(lg_conf["vc_subtitle"])
                             vc_active_info = lg_conf["vc_active_info"]
-                            if not torch.cuda.is_available():
-                                vc_active_info += " | ⚠️ Extremely slow on CPU (takes 5+ mins). KEEP UNCHECKED for fast 10-15s translation!"
                             voice_imitation_gui = gr.Checkbox(
                                 False,
                                 label=lg_conf["vc_active_label"],
@@ -1732,14 +1757,14 @@ def create_gui(theme, logs_in_gui=False):
                             )
                             voice_imitation_method_gui = gr.Dropdown(
                                 voice_imitation_method_options,
-                                value=voice_imitation_method_options[0],
+                                value="openvoice",
                                 label=lg_conf["vc_method_label"],
                                 info=lg_conf["vc_method_info"],
                             )
                             voice_imitation_max_segments_gui = gr.Slider(
                                 label=lg_conf["vc_segments_label"],
                                 info=lg_conf["vc_segments_info"],
-                                value=3,
+                                value=1,
                                 step=1,
                                 minimum=1,
                                 maximum=10,
@@ -1822,12 +1847,12 @@ def create_gui(theme, logs_in_gui=False):
                                 info=lg_conf["acc_max_info"],
                             )
                             acceleration_rate_regulation_gui = gr.Checkbox(
-                                True,
+                                False,
                                 label=lg_conf["acc_rate_label"],
                                 info=lg_conf["acc_rate_info"],
                             )
                             avoid_overlap_gui = gr.Checkbox(
-                                True,
+                                False,
                                 label=lg_conf["or_label"],
                                 info=lg_conf["or_info"],
                             )
@@ -2928,6 +2953,7 @@ if __name__ == "__main__":
     app.queue()
 
     app.launch(
+        server_port=7860,
         max_threads=1,
         share=args.public_url,
         show_error=True,

@@ -177,10 +177,41 @@ def translate_iterative(segments, target, source=None):
     return segments_
 
 
+def sanitize_source_transcription(text: str, source_lang: str = "es") -> str:
+    """
+    Corrects common Whisper phonetic/acoustic transcription errors in medical/scientific
+    domain (especially Spanish) prior to translation.
+    """
+    if not isinstance(text, str) or not text:
+        return text or ""
+    
+    corrections = [
+        (r"\banticoblante\b", "anticoagulante"),
+        (r"\banticobulante\b", "anticoagulante"),
+        (r"\bácido cítrico de extrosa\b", "ácido cítrico-dextrosa"),
+        (r"\bde extrosa\b", "dextrosa"),
+        (r"\ben fórmula o\b", "en fórmula A o"),
+        (r"\bpara esperar la fracción\b", "para aspirar la fracción"),
+        (r"\bglúblos\b", "glóbulos"),
+        (r"\bpipita estere\b", "pipeta Pasteur estéril"),
+        (r"\bpipita estére\b", "pipeta Pasteur estéril"),
+        (r"\bpipeta estere\b", "pipeta Pasteur estéril"),
+        (r"\bdebe revisarse en un entorno\b", "debe realizarse en un entorno"),
+        (r"\baceptico\b", "aséptico"),
+        (r"\bperrepeante\b", "PRP antes de"),
+        (r"\bperrepe\b", "PRP"),
+        (r"\bPP\b", "PRP"),
+    ]
+    for pattern, repl in corrections:
+        text = re.sub(pattern, repl, text, flags=re.IGNORECASE)
+    return text
+
+
 def normalize_translated_text(text: str) -> str:
     """
-    Cleans up smart quotes, em-dashes, and special Unicode characters
-    to ensure clean TTS audio synthesis and subtitle rendering.
+    Cleans up smart quotes, em-dashes, special Unicode characters,
+    and erroneous machine translations for medical terms to ensure
+    clean TTS audio synthesis and subtitle rendering.
     """
     if not isinstance(text, str) or not text:
         return text or ""
@@ -198,6 +229,19 @@ def normalize_translated_text(text: str) -> str:
     for old, new in replacements:
         if old:
             text = text.replace(old, new)
+            
+    # Medical translation corrections for known translator hallucinations
+    medical_fixes = [
+        (r"\banti-kink protection\b", "anticoagulant"),
+        (r"\btubing with the appropriate anticoagulant\b", "tubes with the appropriate anticoagulant"),
+        (r"\bcitric acid derived from sucrose\b", "acid citrate dextrose"),
+        (r"\bsmall glass pipe\b", "sterile Pasteur pipette"),
+        (r"\bmust be reviewed in an environment that is as aseptic\b", "must be performed in an environment as aseptic"),
+        (r"\bmust be reviewed in an environment\b", "must be performed in an environment"),
+    ]
+    for pattern, repl in medical_fixes:
+        text = re.sub(pattern, repl, text, flags=re.IGNORECASE)
+
     return text.strip()
 
 
@@ -660,7 +704,7 @@ def translate_google_batch(segments, target, source=None, max_chars=4000):
     current_length = 0
 
     for seg in segments_copy:
-        text = seg["text"].strip() or " "
+        text = sanitize_source_transcription(seg["text"].strip(), source_lang) or " "
         line_len = len(text) + len(DELIMITER)
         if current_length + line_len > max_chars and current_chunk:
             chunks.append(current_chunk)
@@ -698,7 +742,7 @@ def translate_google_batch(segments, target, source=None, max_chars=4000):
                 full_translated = "".join(part[0] for part in data[0] if part and part[0])
                 split_translated = full_translated.split("||||")
                 if len(split_translated) == len(chunk):
-                    translated_lines.extend(t.strip() for t in split_translated)
+                    translated_lines.extend(normalize_translated_text(t.strip()) for t in split_translated)
                     chunk_translated = True
         except Exception as err:
             logger.warning(f"Google delimiter batch failed: {err}")
@@ -746,7 +790,7 @@ def translate_deepl_batch(segments, target, source=None, batch_size=50):
         else None
     )
 
-    text_lines = [line["text"].strip() or " " for line in segments_copy]
+    text_lines = [sanitize_source_transcription(line["text"].strip(), source_lang) or " " for line in segments_copy]
     translated_lines = []
     progress_bar = tqdm(total=len(text_lines), desc="Translating (DeepL Batch)")
     session = requests.Session()

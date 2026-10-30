@@ -154,7 +154,7 @@ def edge_tts_voices_list():
     return formatted_voices
 
 
-EDGE_TTS_FEMALE_PITCH = os.getenv("EDGE_TTS_FEMALE_PITCH", "-30Hz")
+EDGE_TTS_FEMALE_PITCH = os.getenv("EDGE_TTS_FEMALE_PITCH", "+0Hz")
 EDGE_TTS_MALE_PITCH = os.getenv("EDGE_TTS_MALE_PITCH", "+0Hz")
 
 
@@ -171,7 +171,7 @@ def segments_egde_tts(filtered_edge_segments, TRANSLATE_AUDIO_TO, is_gui):
         start = segment["start"]
         tts_name = segment["tts_name"]
 
-        female_pitch = os.getenv("EDGE_TTS_FEMALE_PITCH", "-30Hz")
+        female_pitch = os.getenv("EDGE_TTS_FEMALE_PITCH", "+0Hz")
         male_pitch = os.getenv("EDGE_TTS_MALE_PITCH", "+0Hz")
         pitch = (
             female_pitch if tts_name.endswith("-Female") else male_pitch
@@ -185,12 +185,22 @@ def segments_egde_tts(filtered_edge_segments, TRANSLATE_AUDIO_TO, is_gui):
         try:
             if is_gui:
                 async def _save():
-                    comm = edge_tts.Communicate(
-                        text,
-                        "-".join(tts_name.split("-")[:-1]),
-                        pitch=pitch,
-                    )
-                    await comm.save(temp_file)
+                    last_err = None
+                    for attempt in range(4):
+                        try:
+                            comm = edge_tts.Communicate(
+                                text,
+                                "-".join(tts_name.split("-")[:-1]),
+                                pitch=pitch,
+                            )
+                            await comm.save(temp_file)
+                            if os.path.exists(temp_file) and os.path.getsize(temp_file) > 0:
+                                return
+                        except Exception as e:
+                            last_err = e
+                            await asyncio.sleep(1.0 * (attempt + 1))
+                    if last_err:
+                        raise last_err
 
                 asyncio.run(_save())
             else:
@@ -213,10 +223,20 @@ def segments_egde_tts(filtered_edge_segments, TRANSLATE_AUDIO_TO, is_gui):
             )
             verify_saved_file_and_size(filename)
 
+            # Deepen chest resonance / bhari voice timbre matching reference
+            if not tts_name.endswith("-Female") and os.getenv("EDGE_TTS_WARMTH_EQ", "false").lower() == "true":
+                try:
+                    temp_eq = filename[:-4] + "_eq.ogg"
+                    eq_cmd = f'ffmpeg -y -loglevel panic -i "{filename}" -af "equalizer=f=150:width_type=o:width=1.5:g=2.5,equalizer=f=3500:width_type=o:width=1.5:g=-2.0" "{temp_eq}"'
+                    if os.system(eq_cmd) == 0 and os.path.exists(temp_eq) and os.path.getsize(temp_eq) > 0:
+                        os.replace(temp_eq, filename)
+                except Exception as eq_err:
+                    logger.debug(f"EQ filter note: {eq_err}")
+
         except Exception as error:
             error_handling_in_tts(error, segment, TRANSLATE_AUDIO_TO, filename)
 
-    max_workers = min(6, len(segments))
+    max_workers = min(12, len(segments))
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
         list(tqdm(executor.map(process_single_segment, segments), total=len(segments)))
 
@@ -291,6 +311,16 @@ def segments_bark_tts(
                 subtype="vorbis",
             )
             verify_saved_file_and_size(filename)
+
+            # Deepen chest resonance / bhari voice timbre matching reference
+            if not tts_name.endswith("-Female") and os.getenv("EDGE_TTS_WARMTH_EQ", "false").lower() == "true":
+                try:
+                    temp_eq = filename[:-4] + "_eq.ogg"
+                    eq_cmd = f'ffmpeg -y -loglevel panic -i "{filename}" -af "equalizer=f=150:width_type=o:width=1.5:g=2.5,equalizer=f=3500:width_type=o:width=1.5:g=-2.0" "{temp_eq}"'
+                    if os.system(eq_cmd) == 0 and os.path.exists(temp_eq) and os.path.getsize(temp_eq) > 0:
+                        os.replace(temp_eq, filename)
+                except Exception as eq_err:
+                    logger.debug(f"EQ filter note: {eq_err}")
         except Exception as error:
             error_handling_in_tts(error, segment, TRANSLATE_AUDIO_TO, filename)
         gc.collect()
@@ -397,6 +427,16 @@ def segments_vits_tts(filtered_vits_segments, TRANSLATE_AUDIO_TO):
                 subtype="vorbis",
             )
             verify_saved_file_and_size(filename)
+
+            # Deepen chest resonance / bhari voice timbre matching reference
+            if not tts_name.endswith("-Female") and os.getenv("EDGE_TTS_WARMTH_EQ", "false").lower() == "true":
+                try:
+                    temp_eq = filename[:-4] + "_eq.ogg"
+                    eq_cmd = f'ffmpeg -y -loglevel panic -i "{filename}" -af "equalizer=f=150:width_type=o:width=1.5:g=2.5,equalizer=f=3500:width_type=o:width=1.5:g=-2.0" "{temp_eq}"'
+                    if os.system(eq_cmd) == 0 and os.path.exists(temp_eq) and os.path.getsize(temp_eq) > 0:
+                        os.replace(temp_eq, filename)
+                except Exception as eq_err:
+                    logger.debug(f"EQ filter note: {eq_err}")
         except Exception as error:
             error_handling_in_tts(error, segment, TRANSLATE_AUDIO_TO, filename)
         gc.collect()
@@ -704,6 +744,16 @@ def segments_coqui_tts(
                 subtype="vorbis",
             )
             verify_saved_file_and_size(filename)
+
+            # Deepen chest resonance / bhari voice timbre matching reference
+            if not tts_name.endswith("-Female") and os.getenv("EDGE_TTS_WARMTH_EQ", "false").lower() == "true":
+                try:
+                    temp_eq = filename[:-4] + "_eq.ogg"
+                    eq_cmd = f'ffmpeg -y -loglevel panic -i "{filename}" -af "equalizer=f=150:width_type=o:width=1.5:g=2.5,equalizer=f=3500:width_type=o:width=1.5:g=-2.0" "{temp_eq}"'
+                    if os.system(eq_cmd) == 0 and os.path.exists(temp_eq) and os.path.getsize(temp_eq) > 0:
+                        os.replace(temp_eq, filename)
+                except Exception as eq_err:
+                    logger.debug(f"EQ filter note: {eq_err}")
         except Exception as error:
             error_handling_in_tts(error, segment, TRANSLATE_AUDIO_TO, filename)
         gc.collect()
@@ -892,6 +942,16 @@ def segments_vits_onnx_tts(filtered_onnx_vits_segments, TRANSLATE_AUDIO_TO):
                 subtype="vorbis",
             )
             verify_saved_file_and_size(filename)
+
+            # Deepen chest resonance / bhari voice timbre matching reference
+            if not tts_name.endswith("-Female") and os.getenv("EDGE_TTS_WARMTH_EQ", "false").lower() == "true":
+                try:
+                    temp_eq = filename[:-4] + "_eq.ogg"
+                    eq_cmd = f'ffmpeg -y -loglevel panic -i "{filename}" -af "equalizer=f=150:width_type=o:width=1.5:g=2.5,equalizer=f=3500:width_type=o:width=1.5:g=-2.0" "{temp_eq}"'
+                    if os.system(eq_cmd) == 0 and os.path.exists(temp_eq) and os.path.getsize(temp_eq) > 0:
+                        os.replace(temp_eq, filename)
+                except Exception as eq_err:
+                    logger.debug(f"EQ filter note: {eq_err}")
         except Exception as error:
             error_handling_in_tts(error, segment, TRANSLATE_AUDIO_TO, filename)
         gc.collect()
@@ -962,6 +1022,16 @@ def segments_openai_tts(
                 subtype="vorbis",
             )
             verify_saved_file_and_size(filename)
+
+            # Deepen chest resonance / bhari voice timbre matching reference
+            if not tts_name.endswith("-Female") and os.getenv("EDGE_TTS_WARMTH_EQ", "false").lower() == "true":
+                try:
+                    temp_eq = filename[:-4] + "_eq.ogg"
+                    eq_cmd = f'ffmpeg -y -loglevel panic -i "{filename}" -af "equalizer=f=150:width_type=o:width=1.5:g=2.5,equalizer=f=3500:width_type=o:width=1.5:g=-2.0" "{temp_eq}"'
+                    if os.system(eq_cmd) == 0 and os.path.exists(temp_eq) and os.path.getsize(temp_eq) > 0:
+                        os.replace(temp_eq, filename)
+                except Exception as eq_err:
+                    logger.debug(f"EQ filter note: {eq_err}")
 
         except Exception as error:
             error_handling_in_tts(error, segment, TRANSLATE_AUDIO_TO, filename)
@@ -1152,7 +1222,7 @@ def accelerate_segments(
 
         # duration
         duration_true = end - start
-        duration_tts = librosa.get_duration(filename=filename)
+        duration_tts = sf.info(filename).duration
 
         # Accelerate percentage
         acc_percentage = duration_tts / duration_true
